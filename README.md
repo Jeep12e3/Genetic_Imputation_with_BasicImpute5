@@ -349,9 +349,7 @@ Demo ini mempertahankan ide utama:
 pilih state HMM yang relevan dulu sebelum forward-backward dijalankan
 ```
 
-## Ringkasan Untuk Presentasi
-
-Kalimat yang bisa dipakai:
+## Ringkasan
 
 > HMM standar memakai semua reference haplotype sebagai hidden state. IMPUTE5
 > mempercepat proses dengan memakai PBWT untuk memilih haplotype yang mirip
