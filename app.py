@@ -642,33 +642,101 @@ st.write("State yang terpilih: " + ", ".join(f"h{state}" for state in selected_s
 st.dataframe(reference_display_dataframe(reference_panel, selected_states), width="stretch")
 
 with st.expander("Apa maksud marker teramati dan pola allele terdekat?", expanded=True):
-    st.markdown(
-        """
-        **Marker teramati** berarti marker pada target yang nilainya sudah diketahui,
-        yaitu bukan `?`.
+    _observed_pos = [i for i, a in enumerate(target) if a is not None]
+    _missing_pos = [i for i, a in enumerate(target) if a is None]
+    _target_display = "  ".join("?" if a is None else str(a) for a in target)
+    _marker_label = "  ".join(f"M{i}" for i in range(len(target)))
+    _observed_label = ", ".join(f"`M{i}={target[i]}`" for i in _observed_pos)
+    _missing_label = ", ".join(f"`M{i}`" for i in _missing_pos)
 
-        Contoh:
+    _obs_header = "  ".join(f"M{i}" for i in _observed_pos)
+    _obs_values = "  ".join(str(target[i]) for i in _observed_pos)
+
+    # Build comparison lines for top 2 best and 1 worst reference
+    _sim_df = similarity_dataframe(reference_panel, target)
+    _total_obs = len(_observed_pos)
+    _example_lines = []
+    for _, row in _sim_df.head(2).iterrows():
+        ref_name = row["Reference"]
+        ref_idx = int(ref_name[1:])
+        pattern = row["Pola pada marker teramati"]
+        matches = row["Jumlah cocok"]
+        _example_lines.append(f"{ref_name} pada marker teramati: {pattern}  → {matches}/{_total_obs} cocok")
+    _worst_row = _sim_df.iloc[-1]
+    _worst_name = _worst_row["Reference"]
+    _worst_pattern = _worst_row["Pola pada marker teramati"]
+    _worst_matches = _worst_row["Jumlah cocok"]
+    _example_lines.append(f"{_worst_name} pada marker teramati: {_worst_pattern}  → {_worst_matches}/{_total_obs} cocok  (paling berbeda)")
+    _example_block = "\n        ".join(_example_lines)
+
+    st.markdown(
+        f"""
+        ### Apa itu marker teramati?
+
+        **Marker teramati** adalah marker pada target yang nilainya sudah diketahui, yaitu bukan `?`.
+
+        Target saat ini:
 
         ```text
-        target = 0 1 ? 1 ? 0 ? 1 ? 1
+        target = {_target_display}
+                 {_marker_label}
         ```
 
-        Marker yang teramati adalah `M0`, `M1`, `M3`, `M5`, `M7`, dan `M9`.
-        Marker seperti `M2`, `M4`, `M6`, dan `M8` tidak dipakai untuk mencari
-        kemiripan karena nilainya masih `?`.
+        Marker yang **teramati**: {_observed_label}
 
-        Demo ini mencari kemiripan dengan melihat apakah reference punya nilai
-        yang sama dengan target pada marker yang sudah diketahui. Semakin banyak
-        posisi yang cocok, semakin mirip reference tersebut dengan target.
+        Marker yang **hilang** (tidak dipakai untuk mencari kemiripan): {_missing_label}
 
-        PBWT asli melakukan ini dengan struktur data yang jauh lebih efisien dan
-        melihat kecocokan lokal sepanjang kromosom. Demo ini memakai versi yang
-        lebih mudah dibaca: pola allele pada marker teramati dibandingkan secara langsung.
+        Kenapa yang hilang tidak dipakai? Karena kita belum tahu nilainya — justru itulah yang
+        ingin kita tebak. Kita hanya bisa membandingkan apa yang sudah diketahui.
         """
     )
     st.dataframe(observed_marker_dataframe(target), width="stretch", hide_index=True)
-    st.write("Tabel di bawah menunjukkan gambaran sederhana kemiripan reference terhadap target.")
+    st.markdown(
+        f"""
+        ---
+        ### Bagaimana sistem menentukan "pola terdekat"?
+
+        Ini adalah inti dari seleksi state. Sistem melakukan langkah berikut secara berurutan:
+
+        **Langkah 1 — Ambil pola target pada marker teramati**
+
+        Dari marker yang sudah diketahui, kita bentuk sebuah pola:
+
+        ```text
+        Pola target (hanya marker teramati):
+        {_obs_header}
+        {_obs_values}
+        ```
+
+        **Langkah 2 — Bandingkan pola tiap reference terhadap pola target**
+
+        Setiap reference haplotype diambil nilai allele-nya pada posisi yang sama,
+        lalu dihitung berapa banyak yang cocok:
+
+        ```text
+        {_example_block}
+        ```
+
+        Semakin banyak posisi yang cocok, semakin "dekat" reference tersebut dengan target.
+
+        **Langkah 3 — Urutkan reference dari yang paling mirip**
+
+        Reference dengan pola paling cocok diurutkan ke atas. Kemudian diambil
+        sejumlah reference teratas (diatur oleh slider **"Jumlah neighbour"** di sidebar)
+        sebagai kandidat copying state untuk HMM.
+
+        **Langkah 4 — Hasilnya: daftar state terpilih**
+
+        Hanya reference yang terpilih inilah yang akan dipakai HMM. Reference lain
+        yang polanya sangat berbeda dengan target tidak akan masuk hitungan.
+        """
+    )
+    st.write("Tabel berikut menunjukkan detail kemiripan setiap reference terhadap target (diurutkan dari paling mirip):")
     st.dataframe(similarity_dataframe(reference_panel, target), width="stretch", hide_index=True)
+    st.caption(
+        "Kolom 'Jumlah cocok' menunjukkan berapa banyak posisi marker teramati yang nilainya sama "
+        "antara reference dan target. Reference dengan jumlah cocok terbanyak cenderung masuk sebagai state HMM."
+    )
 
 with st.expander("Kalau PBWT asli di IMPUTE5, kira-kira seperti apa?"):
     st.markdown(
@@ -730,31 +798,89 @@ st.dataframe(target_display_dataframe(target), width="stretch")
 
 with st.expander("Dari mana angka emission, transition, dan posterior muncul?", expanded=True):
     first_observed = next((index for index, allele in enumerate(target) if allele is not None), 0)
+
+    st.markdown("### Ide besar HMM")
     st.markdown(
-        f"""
-        Angka pada HMM tidak muncul tiba-tiba. Di demo ini, angka-angka berasal dari
-        parameter yang ada di sidebar:
-
-        - **Emission error rate** sekarang = `{error_rate:.3f}`
-        - **Recombination / switch rate** sekarang = `{recombination_rate:.2f}`
-
-        **Emission probability** dihitung seperti ini:
-
-        - Jika allele target cocok dengan allele reference, probabilitasnya `1 - error_rate`.
-        - Jika tidak cocok, probabilitasnya `error_rate`.
-        - Jika target masih `?`, emission dianggap `1.0` karena tidak ada observasi yang bisa dibandingkan.
-
-        **Transition probability** dihitung seperti ini:
-
-        - Jika HMM tetap menyalin dari reference yang sama, probabilitasnya `1 - switch_rate`.
-        - Jika HMM berpindah ke reference lain, sisa probabilitas `switch_rate` dibagi ke state lain.
-
-        **Forward-backward** lalu menggabungkan semua emission dan transition dari kiri dan kanan
-        marker untuk menghasilkan posterior probability. Posterior inilah bobot akhir setiap state.
-
-        Contoh angka di bawah memakai marker teramati `M{first_observed}`.
-        """
+        'Bayangkan target haplotype seperti seseorang yang "menyalin" dari salah satu reference haplotype, '
+        "satu marker demi satu marker. HMM bertugas menjawab:"
     )
+    st.info("Pada marker ini, reference mana yang paling mungkin sedang disalin oleh target?")
+    st.markdown(
+        'Setiap reference terpilih disebut **hidden state**. Nama "hidden" karena kita tidak '
+        "tahu pasti state mana yang benar — kita hanya bisa mengestimasi berdasarkan data."
+    )
+
+    st.divider()
+    st.markdown("### 1. Emission probability — seberapa cocok allele-nya?")
+    st.markdown(
+        "Emission menjawab pertanyaan: *jika target sedang menyalin dari reference h_x, "
+        "seberapa masuk akal allele target yang terlihat di marker ini?*"
+    )
+    st.markdown(
+        "Aturannya sederhana:\n\n"
+        "```text\n"
+        "Jika allele target == allele reference → probabilitas = 1 - error_rate  (tinggi, cocok)\n"
+        "Jika allele target != allele reference → probabilitas = error_rate       (rendah, tidak cocok)\n"
+        "Jika target masih '?'                 → probabilitas = 1.0              (tidak ada info, netral)\n"
+        "```"
+    )
+    st.markdown(f"Dengan **emission error rate** sekarang = `{error_rate:.3f}`:")
+    st.markdown(
+        f"```text\n"
+        f"Cocok       → emission = {1.0 - error_rate:.3f}\n"
+        f"Tidak cocok → emission = {error_rate:.3f}\n"
+        f"```"
+    )
+    emission_lines = "\n".join(
+        f"  h{ref_idx} allele di M{first_observed} = {reference_panel[ref_idx][first_observed]}"
+        f" → {'cocok' if reference_panel[ref_idx][first_observed] == target[first_observed] else 'tidak cocok'}"
+        f" → emission = {(1.0 - error_rate) if reference_panel[ref_idx][first_observed] == target[first_observed] else error_rate:.3f}"
+        for ref_idx in selected_states
+    )
+    st.markdown(f"Contoh nyata dari data saat ini, pada marker **M{first_observed}** (nilai target = `{target[first_observed]}`):")
+    st.markdown(f"```text\n{emission_lines}\n```")
+
+    st.divider()
+    st.markdown("### 2. Transition probability — seberapa mudah berpindah state?")
+    st.markdown(
+        "Transition menjawab: *apakah target tetap menyalin dari reference yang sama, "
+        "atau berpindah ke reference lain di marker berikutnya?*\n\n"
+        "Perpindahan ini merepresentasikan **rekombinasi** — fenomena biologis di mana "
+        "dua kromosom bertukar segmen. Semakin tinggi switch rate, semakin sering "
+        "model mempertimbangkan kemungkinan berpindah ke reference lain."
+    )
+    n_states = len(selected_states)
+    denom = n_states - 1 if n_states > 1 else 1
+    st.markdown(
+        f"Dengan **recombination / switch rate** sekarang = `{recombination_rate:.2f}` "
+        f"dan jumlah state terpilih = `{n_states}`:"
+    )
+    st.markdown(
+        f"```text\n"
+        f"P(tetap di state yang sama)  = 1 - switch_rate = {1.0 - recombination_rate:.2f}\n"
+        f"P(pindah ke state lain)      = switch_rate / (jumlah state - 1)\n"
+        f"                             = {recombination_rate:.2f} / {denom}\n"
+        f"                             = {recombination_rate / denom:.3f}  (per state tujuan)\n"
+        f"```"
+    )
+    st.markdown("Artinya, model cenderung \"setia\" pada satu reference, tapi tidak menutup kemungkinan pindah.")
+
+    st.divider()
+    st.markdown("### 3. Forward-backward — menggabungkan informasi kiri dan kanan")
+    st.markdown(
+        "Forward-backward adalah cara HMM menghitung **posterior probability** setiap state "
+        "di setiap marker. Idenya:\n\n"
+        "- **Forward pass** (kiri → kanan): di setiap marker, hitung seberapa besar probabilitas "
+        "berada di state ini jika kita melihat semua allele dari awal hingga marker ini.\n"
+        "- **Backward pass** (kanan → kiri): hitung hal yang sama tapi dari arah sebaliknya, "
+        "yaitu semua allele dari akhir hingga marker ini.\n"
+        "- **Posterior** = forward × backward, lalu dinormalisasi agar totalnya = 1.\n\n"
+        "Hasilnya: setiap state mendapat \"bobot\" yang mencerminkan seberapa besar kontribusinya "
+        "dalam menjelaskan pola allele target, dari **kedua sisi** sekaligus."
+    )
+
+    st.divider()
+    st.markdown(f"Tabel berikut menunjukkan contoh angka emission dan transition untuk marker **M{first_observed}**:")
     st.dataframe(
         probability_example_dataframe(
             reference_panel,
@@ -766,6 +892,10 @@ with st.expander("Dari mana angka emission, transition, dan posterior muncul?", 
         ),
         width="stretch",
         hide_index=True,
+    )
+    st.caption(
+        f"Kolom 'Emission' menunjukkan seberapa cocok allele reference dengan target di M{first_observed}. "
+        "Kolom 'P(tetap)' dan 'P(pindah)' menunjukkan peluang transisi ke marker berikutnya."
     )
 
 with st.expander("Kalau HMM asli di IMPUTE5, kira-kira seperti apa?"):
@@ -887,6 +1017,58 @@ else:
                 Jika kurang dari `0.5`, prediksi akhirnya menjadi `0`.
                 """
             )
+
+    st.divider()
+    st.subheader("Haplotype Target — Sebelum dan Sesudah Imputasi")
+    st.write(
+        "Di bawah ini adalah perbandingan target haplotype sebelum diimputasi (masih ada `?`) "
+        "dan sesudah diimputasi (semua `?` sudah diganti dengan prediksi model)."
+    )
+
+    completed_values = []
+    for i, allele in enumerate(target):
+        if allele is not None:
+            completed_values.append(str(allele))
+        else:
+            pred = 1 if imputed[i] >= 0.5 else 0
+            completed_values.append(str(pred))
+
+    before_row = ["?" if allele is None else str(allele) for allele in target]
+    after_row = completed_values
+
+    comparison_df = pd.DataFrame(
+        [before_row, after_row],
+        columns=marker_columns(len(target)),
+        index=["Sebelum (dengan ?)", "Sesudah (imputasi)"],
+    )
+    st.dataframe(comparison_df, width="stretch")
+
+    st.markdown("**Keterangan setiap marker:**")
+    summary_rows = []
+    for i, allele in enumerate(target):
+        if allele is None:
+            prob = imputed[i]
+            pred = 1 if prob >= 0.5 else 0
+            summary_rows.append({
+                "Marker": f"M{i}",
+                "Nilai asal": "?",
+                "P(allele = 1)": f"{prob:.3f}",
+                "Prediksi": pred,
+                "Status": "diimputasi",
+            })
+        else:
+            summary_rows.append({
+                "Marker": f"M{i}",
+                "Nilai asal": str(allele),
+                "P(allele = 1)": "-",
+                "Prediksi": allele,
+                "Status": "sudah diketahui",
+            })
+    st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
+    st.caption(
+        "Marker berstatus 'sudah diketahui' tidak diubah oleh model. "
+        "Marker berstatus 'diimputasi' adalah tebakan model berdasarkan HMM."
+    )
 
 with st.expander("Penjelasan singkat alur implementasi"):
     st.markdown(
