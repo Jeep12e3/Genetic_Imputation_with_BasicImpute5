@@ -1,4 +1,3 @@
-from bisect import bisect_left
 from typing import Iterable, Optional
 
 import pandas as pd
@@ -58,70 +57,29 @@ def parse_target_dataframe(dataframe: pd.DataFrame) -> list[MaybeAllele]:
     return target
 
 
-def reverse_prefix_key(
-    haplotype: list[MaybeAllele],
+def similarity_score(
+    haplotype: list[Allele],
+    target: list[MaybeAllele],
     observed_positions: list[int],
-    marker: int,
-) -> tuple[int, ...]:
-    prefix_positions = [position for position in observed_positions if position <= marker]
-    return tuple(int(haplotype[position]) for position in reversed(prefix_positions))
+) -> int:
+    return sum(1 for pos in observed_positions if haplotype[pos] == target[pos])
 
 
-def choose_neighbours(
-    sorted_items: list[tuple[tuple[int, ...], int]],
-    insert_at: int,
-    count: int,
-) -> list[int]:
-    chosen: list[int] = []
-    left = insert_at - 1
-    right = insert_at
-
-    while len(chosen) < count and (left >= 0 or right < len(sorted_items)):
-        if left >= 0:
-            chosen.append(sorted_items[left][1])
-            left -= 1
-            if len(chosen) == count:
-                break
-
-        if right < len(sorted_items):
-            chosen.append(sorted_items[right][1])
-            right += 1
-
-    return chosen
-
-
-def pbwt_inspired_state_selection(
+def global_similarity_state_selection(
     reference_panel: list[list[Allele]],
     target: list[MaybeAllele],
-    neighbours_per_marker: int,
+    top_n: int,
 ) -> list[int]:
     observed_positions = [index for index, allele in enumerate(target) if allele is not None]
     if not observed_positions:
         return list(range(len(reference_panel)))
 
-    selected: list[int] = []
-
-    for marker in observed_positions:
-        target_key = reverse_prefix_key(target, observed_positions, marker)
-        sorted_items = sorted(
-            (
-                reverse_prefix_key(reference_haplotype, observed_positions, marker),
-                reference_index,
-            )
-            for reference_index, reference_haplotype in enumerate(reference_panel)
-        )
-        keys_only = [item[0] for item in sorted_items]
-        insert_at = bisect_left(keys_only, target_key)
-        selected.extend(choose_neighbours(sorted_items, insert_at, neighbours_per_marker))
-
-    unique_selected: list[int] = []
-    seen: set[int] = set()
-    for state in selected:
-        if state not in seen:
-            unique_selected.append(state)
-            seen.add(state)
-
-    return unique_selected
+    scored = sorted(
+        range(len(reference_panel)),
+        key=lambda i: similarity_score(reference_panel[i], target, observed_positions),
+        reverse=True,
+    )
+    return scored[:top_n]
 
 
 def emission_probability(
@@ -266,14 +224,14 @@ def impute_missing_alleles(
 def run_imputation(
     reference_panel: list[list[Allele]],
     target: list[MaybeAllele],
-    neighbours_per_marker: int,
+    top_n: int,
     error_rate: float,
     recombination_rate: float,
 ) -> tuple[list[int], list[list[float]], list[Optional[float]]]:
-    selected_states = pbwt_inspired_state_selection(
+    selected_states = global_similarity_state_selection(
         reference_panel,
         target,
-        neighbours_per_marker,
+        top_n,
     )
     alpha = forward_algorithm(
         reference_panel,
@@ -488,8 +446,10 @@ st.markdown(
     **Ide utama.** HMM biasa dapat memakai semua reference haplotype sebagai
     hidden state. Masalahnya, jumlah state menjadi sangat besar jika reference
     panel berisi ribuan sampai jutaan haplotype. IMPUTE5 mengurangi beban ini
-    dengan memilih haplotype yang paling mirip secara lokal terlebih dahulu,
-    lalu menjalankan HMM hanya pada subset yang terpilih.
+    dengan memilih haplotype yang paling mirip secara lokal (menggunakan PBWT)
+    terlebih dahulu, lalu menjalankan HMM hanya pada subset yang terpilih.
+    Demo ini mensimulasikan ide tersebut dengan cara yang lebih mudah dibaca:
+    memilih top-N reference haplotype berdasarkan kemiripan global.
     """
 )
 
@@ -502,15 +462,15 @@ st.info(
 with st.sidebar:
     st.header("Kontrol")
     st.write("Nilai-nilai ini bisa diubah untuk melihat bagaimana algoritma bereaksi.")
-    neighbours_per_marker = st.slider(
-        "Jumlah neighbour PBWT-inspired per marker teramati",
+    top_n = st.slider(
+        "Jumlah reference haplotype terpilih (top-N paling mirip)",
         1,
-        6,
+        8,
         4,
         help=(
             "Semakin besar nilainya, semakin banyak reference haplotype yang dipilih "
-            "sebelum HMM dijalankan. State lebih banyak bisa memberi cakupan lebih luas, "
-            "tetapi komputasi juga lebih berat."
+            "untuk dipakai sebagai state HMM. Haplotype dipilih berdasarkan kemiripan "
+            "pola allele dengan target pada marker yang sudah diketahui."
         ),
     )
     error_rate = st.slider(
@@ -608,7 +568,7 @@ target = parse_target_dataframe(target_editor)
 selected_states, posterior, imputed = run_imputation(
     reference_panel,
     target,
-    neighbours_per_marker,
+    top_n,
     error_rate,
     recombination_rate,
 )
@@ -618,22 +578,22 @@ metric_left.metric("Jumlah reference haplotype", len(reference_panel))
 metric_mid.metric("State pada HMM standar", len(reference_panel))
 metric_right.metric("State terpilih pada demo", len(selected_states))
 
-st.subheader("2. Seleksi State PBWT-Inspired")
+st.subheader("2. Seleksi State Berdasarkan Kemiripan")
 st.write(
-    "Versi sederhananya: sebelum menebak nilai yang hilang, aplikasi mencari dulu baris reference "
-    "yang bentuknya paling mirip dengan target pada bagian yang sudah diketahui. Baris yang "
-    "mirip itulah yang dipakai oleh HMM."
+    "Sebelum menebak nilai yang hilang, aplikasi mencari dulu baris reference "
+    "yang paling mirip dengan target pada marker yang sudah diketahui. "
+    "Hanya baris yang paling mirip itulah yang dipakai oleh HMM."
 )
 st.markdown(
     """
     IMPUTE5 asli memakai PBWT untuk menemukan reference haplotype yang memiliki
     kecocokan lokal panjang dengan target. Demo ini memakai pendekatan yang lebih
-    mudah dibaca:
+    mudah dipahami:
 
     1. Lihat hanya marker target yang teramati, bukan `?`.
-    2. Pada setiap marker teramati, urutkan reference haplotype berdasarkan pola allele terdekat.
-    3. Tempatkan pola target ke dalam urutan tersebut.
-    4. Ambil reference haplotype yang posisinya dekat sebagai kandidat copying state.
+    2. Hitung berapa banyak posisi yang nilainya cocok antara target dan setiap reference.
+    3. Urutkan reference dari yang paling banyak cocok.
+    4. Ambil sejumlah reference teratas (diatur oleh slider) sebagai state HMM.
 
     Setelah itu, HMM hanya dijalankan pada state yang terpilih.
     """
@@ -641,7 +601,7 @@ st.markdown(
 st.write("State yang terpilih: " + ", ".join(f"h{state}" for state in selected_states))
 st.dataframe(reference_display_dataframe(reference_panel, selected_states), width="stretch")
 
-with st.expander("Apa maksud marker teramati dan pola allele terdekat?", expanded=True):
+with st.expander("Apa maksud marker teramati dan bagaimana kemiripan dihitung?", expanded=True):
     _observed_pos = [i for i, a in enumerate(target) if a is not None]
     _missing_pos = [i for i, a in enumerate(target) if a is None]
     _target_display = "  ".join("?" if a is None else str(a) for a in target)
@@ -719,11 +679,12 @@ with st.expander("Apa maksud marker teramati dan pola allele terdekat?", expande
 
         Semakin banyak posisi yang cocok, semakin "dekat" reference tersebut dengan target.
 
-        **Langkah 3 — Urutkan reference dari yang paling mirip**
+        **Langkah 3 — Urutkan reference dari yang paling mirip dan ambil top-N**
 
-        Reference dengan pola paling cocok diurutkan ke atas. Kemudian diambil
-        sejumlah reference teratas (diatur oleh slider **"Jumlah neighbour"** di sidebar)
-        sebagai kandidat copying state untuk HMM.
+        Reference dengan jumlah cocok terbanyak diurutkan ke atas. Kemudian diambil
+        sejumlah reference teratas (diatur oleh slider **"Jumlah reference haplotype terpilih"**
+        di sidebar) sebagai state HMM. Misalnya jika slider = 4, maka 4 reference dengan
+        jumlah cocok terbanyak yang masuk.
 
         **Langkah 4 — Hasilnya: daftar state terpilih**
 
@@ -735,53 +696,48 @@ with st.expander("Apa maksud marker teramati dan pola allele terdekat?", expande
     st.dataframe(similarity_dataframe(reference_panel, target), width="stretch", hide_index=True)
     st.caption(
         "Kolom 'Jumlah cocok' menunjukkan berapa banyak posisi marker teramati yang nilainya sama "
-        "antara reference dan target. Reference dengan jumlah cocok terbanyak cenderung masuk sebagai state HMM."
+        "antara reference dan target. Reference dengan jumlah cocok terbanyak dipilih sebagai state HMM — "
+        "sesuai dengan jumlah yang diatur di slider."
     )
 
 with st.expander("Kalau PBWT asli di IMPUTE5, kira-kira seperti apa?"):
     st.markdown(
         """
         Demo ini memilih reference yang mirip dengan cara yang mudah dilihat: hitung berapa
-        banyak allele yang cocok pada marker target yang sudah diketahui. PBWT asli lebih
-        canggih dari itu.
+        banyak allele yang cocok pada marker target yang sudah diketahui, lalu ambil top-N.
+        PBWT asli lebih canggih dari itu.
 
         **Ide PBWT asli secara sederhana:**
 
         1. Pada setiap marker, reference haplotype diurutkan berdasarkan pola allele
            sebelumnya, dibaca dari marker saat ini ke arah kiri. Ini disebut **reverse prefix**.
         2. Haplotype yang berdekatan dalam urutan PBWT biasanya punya segmen allele yang
-           panjang dan mirip.
+           panjang dan mirip — bukan hanya banyak yang cocok, tapi cocok secara beruntun.
         3. Target haplotype seolah-olah "disisipkan" ke dalam urutan itu.
         4. Reference haplotype yang berada di sekitar posisi target diambil sebagai kandidat state.
+        5. Proses ini dilakukan **secara lokal di setiap marker** — sehingga state yang terpilih
+           bisa berbeda di tiap bagian kromosom.
 
-        Contoh kecil:
-
-        ```text
-        target pada marker teramati: M0=0, M1=1, M3=1, M5=0
-
-        Jika sedang berada di M5, pola yang dilihat PBWT adalah dari kanan ke kiri:
-        M5, M3, M1, M0 = 0, 1, 1, 0
-        ```
-
-        Reference yang memiliki pola kanan-ke-kiri mirip dengan `0,1,1,0` akan berada
-        dekat dengan target dalam urutan PBWT. Karena itu reference tersebut dipilih
-        sebagai copying state.
-
-        **Perbedaan dengan demo ini:**
+        **Perbedaan utama dengan demo ini:**
 
         | Bagian | Demo Streamlit | IMPUTE5 asli |
         |---|---|---|
-        | Cara mencari kemiripan | hitung kecocokan sederhana | PBWT/FM-index dan neighbour/divergence selection |
+        | Cara mencari kemiripan | hitung total cocok, ambil top-N global | PBWT/FM-index, neighbour/divergence selection lokal |
+        | Kapan selection dilakukan | sekali, sebelum HMM | dinamis, per window sepanjang kromosom |
         | Skala data | beberapa haplotype | ribuan sampai jutaan haplotype |
         | Tujuan | mudah dipahami | sangat cepat dan hemat memori |
-        | Hasil seleksi | subset kecil reference | subset copying states untuk HMM |
+
+        Konsekuensinya: di IMPUTE5 asli, state yang dipakai HMM bisa **berbeda di tiap bagian
+        kromosom**, mengikuti pola kemiripan lokal. Di demo ini, state dipilih sekali saja
+        berdasarkan kemiripan global.
         """
     )
 
 st.subheader("3. HMM Yang Diperkecil")
 st.write(
-    "Versi sederhananya: HMM memberi bobot pada setiap reference terpilih. Reference yang lebih cocok "
-    "dengan target akan mendapat bobot lebih besar. Bobot ini disebut posterior probability."
+    "HMM menghitung seberapa besar kontribusi setiap reference terpilih dalam menjelaskan "
+    "pola allele target — dari kiri ke kanan (forward) sekaligus dari kanan ke kiri (backward). "
+    "Gabungan keduanya menghasilkan posterior probability tiap state di setiap marker."
 )
 st.markdown(
     """
@@ -878,6 +834,13 @@ with st.expander("Dari mana angka emission, transition, dan posterior muncul?", 
         "Hasilnya: setiap state mendapat \"bobot\" yang mencerminkan seberapa besar kontribusinya "
         "dalam menjelaskan pola allele target, dari **kedua sisi** sekaligus."
     )
+    st.info(
+        "**Catatan implementasi demo ini:** forward dan backward masing-masing dinormalisasi "
+        "di setiap marker untuk mencegah angka terlalu kecil. Akibatnya, nilai absolutnya "
+        "tidak bisa dibandingkan langsung dengan HMM baku — tetapi hasil posterior akhirnya "
+        "tetap **proporsional benar**, karena dinormalisasi sekali lagi saat menghitung posterior. "
+        "Untuk tujuan demo ini, hasil imputasinya tetap valid."
+    )
 
     st.divider()
     st.markdown(f"Tabel berikut menunjukkan contoh angka emission dan transition untuk marker **M{first_observed}**:")
@@ -895,7 +858,9 @@ with st.expander("Dari mana angka emission, transition, dan posterior muncul?", 
     )
     st.caption(
         f"Kolom 'Emission' menunjukkan seberapa cocok allele reference dengan target di M{first_observed}. "
-        "Kolom 'P(tetap)' dan 'P(pindah)' menunjukkan peluang transisi ke marker berikutnya."
+        "Kolom 'P(tetap di state ini)' dan 'P(pindah ke state lain)' menunjukkan peluang transisi "
+        "saat model bergerak dari marker ini ke marker berikutnya — nilainya sama untuk semua marker "
+        "karena demo ini memakai switch rate tetap, bukan genetic map."
     )
 
 with st.expander("Kalau HMM asli di IMPUTE5, kira-kira seperti apa?"):
@@ -944,6 +909,12 @@ with st.expander("Kalau HMM asli di IMPUTE5, kira-kira seperti apa?"):
         **Forward-backward asli**
 
         Forward-backward menghitung probabilitas copying state di sepanjang kromosom.
+        Dalam HMM baku, forward dinormalisasi per marker untuk numerical stability,
+        sementara backward menggunakan skala yang sama dengan forward.
+        Demo ini menyederhanakan dengan menormalisasi keduanya secara terpisah —
+        nilai absolutnya berbeda dari HMM baku, tetapi posterior akhirnya
+        tetap proporsional benar karena dinormalisasi lagi saat penggabungan.
+
         Setelah posterior state didapat, marker yang tidak ada pada target tetapi ada
         pada reference dapat diisi dengan cara:
 
@@ -976,7 +947,7 @@ if results.empty:
 else:
     st.write(
         "`P(allele = 1)` adalah keyakinan model bahwa marker yang hilang seharusnya bernilai `1`. "
-        "Jika probabilitas ini di bawah 0.5, prediksi akhirnya menjadi `0`."
+        "Jika probabilitas ini **≥ 0.5**, prediksi akhirnya menjadi `1`. Jika di bawah `0.5`, prediksi menjadi `0`."
     )
     st.dataframe(results, width="stretch", hide_index=True)
     st.bar_chart(results.set_index("Marker")["P(allele = 1)"], width="stretch")
@@ -1013,7 +984,7 @@ else:
                               = {probability:.3f}
                 ```
 
-                Jika nilainya lebih dari `0.5`, prediksi akhirnya menjadi `1`.
+                Jika nilainya lebih dari atau sama dengan `0.5`, prediksi akhirnya menjadi `1`.
                 Jika kurang dari `0.5`, prediksi akhirnya menjadi `0`.
                 """
             )
@@ -1077,12 +1048,14 @@ with st.expander("Penjelasan singkat alur implementasi"):
 
         1. Mulai dari target haplotype yang memiliki marker hilang.
         2. Bandingkan target dengan reference panel yang lengkap.
-        3. Pilih hanya reference haplotype yang mirip secara lokal sebelum komputasi HMM.
+        3. Pilih top-N reference haplotype yang paling mirip secara global sebagai state HMM.
         4. Jalankan HMM yang lebih kecil dengan haplotype terpilih sebagai hidden state.
         5. Ubah posterior copying probability menjadi probabilitas allele untuk marker yang hilang.
 
         Poin pentingnya: IMPUTE5 tidak menghapus HMM. IMPUTE5 membuat HMM lebih
         scalable dengan mengurangi jumlah state sebelum forward-backward dijalankan.
+        Di demo ini, pengurangan state dilakukan dengan ranking kemiripan global.
+        IMPUTE5 asli melakukannya secara lokal per window menggunakan PBWT.
         """
     )
 
@@ -1090,8 +1063,9 @@ with st.expander("Apa yang disederhanakan dibanding IMPUTE5 asli?"):
     st.markdown(
         """
         - Demo ini memakai array kecil berisi `0`, `1`, dan `?`, bukan file genomik nyata seperti VCF/BGEN/imp5.
-        - Langkah PBWT di sini hanya PBWT-inspired; IMPUTE5 asli memakai PBWT/FM-index yang dioptimalkan.
-        - Probabilitas HMM disederhanakan agar mudah dipahami.
+        - Seleksi state di demo ini menggunakan ranking kemiripan global (top-N); IMPUTE5 asli memakai PBWT/FM-index yang bekerja secara lokal per window kromosom.
+        - Forward dan backward dinormalisasi secara terpisah per marker untuk kemudahan komputasi; HMM baku hanya menormalisasi forward. Hasil posteriornya tetap proporsional benar.
+        - Transition probability di demo ini adalah angka tetap; IMPUTE5 asli menghitungnya dari genetic map dan jarak antar marker.
         - IMPUTE5 asli menangani data phased diploid, genomic window, genetic map, dan reference panel besar.
         - IMPUTE5 asli dioptimalkan untuk kecepatan, memori, dan skala jutaan haplotype.
         """

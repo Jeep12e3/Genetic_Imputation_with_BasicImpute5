@@ -12,7 +12,7 @@ target haplotype dengan marker hilang
 reference haplotype lengkap
         |
         v
-seleksi state PBWT-inspired
+seleksi state berdasarkan kemiripan (top-N)
         |
         v
 HMM yang diperkecil
@@ -83,7 +83,7 @@ Dalam aplikasi:
 Kamu bisa mengubah reference panel dan target haplotype langsung di aplikasi.
 Semua penjelasan dan contoh angka di bawahnya akan ikut berubah secara otomatis.
 
-### 2. Seleksi State PBWT-Inspired
+### 2. Seleksi State Berdasarkan Kemiripan
 
 Sebelum HMM dijalankan, aplikasi mencari reference haplotype yang paling mirip
 dengan target pada marker yang sudah diketahui.
@@ -92,10 +92,11 @@ Langkah-langkahnya:
 
 1. Ambil pola target hanya pada marker teramati (bukan `?`).
 2. Bandingkan pola tiap reference terhadap pola target — hitung berapa posisi yang cocok.
-3. Urutkan reference dari yang paling mirip.
-4. Ambil sejumlah reference teratas (diatur oleh slider) sebagai kandidat state HMM.
+3. Urutkan reference dari yang paling banyak cocok.
+4. Ambil sejumlah reference teratas (top-N, diatur oleh slider) sebagai state HMM.
+   Reference dengan jumlah cocok terbanyak pasti masuk — bukan sekadar "cenderung".
 
-Expander **"Apa maksud marker teramati dan pola allele terdekat?"** menjelaskan
+Expander **"Apa maksud marker teramati dan bagaimana kemiripan dihitung?"** menjelaskan
 proses ini secara langkah demi langkah dengan contoh angka dari data yang sedang aktif.
 
 ### 3. HMM Yang Diperkecil
@@ -104,10 +105,13 @@ Setelah state terpilih, HMM dijalankan hanya pada subset reference tersebut.
 
 - **Emission probability** — seberapa cocok allele target dengan allele reference di marker ini.
   Jika cocok, probabilitas tinggi (`1 - error_rate`). Jika tidak cocok, probabilitas rendah (`error_rate`).
+  Jika marker masih `?`, emission = 1.0 (netral, tidak ada info).
 - **Transition probability** — peluang model tetap menyalin dari reference yang sama atau
-  berpindah ke reference lain (merepresentasikan rekombinasi).
+  berpindah ke reference lain (merepresentasikan rekombinasi). Di demo ini nilainya tetap
+  (diatur slider), bukan dari genetic map seperti IMPUTE5 asli.
 - **Forward-backward** — menggabungkan informasi dari sisi kiri dan kanan setiap marker
-  untuk menghasilkan posterior probability tiap state.
+  untuk menghasilkan posterior probability tiap state. Forward dan backward masing-masing
+  dinormalisasi per marker untuk kemudahan komputasi — hasil posteriornya tetap proporsional benar.
 
 Expander **"Dari mana angka emission, transition, dan posterior muncul?"** menjelaskan
 ketiga konsep ini dengan angka konkret yang dihitung dari nilai slider dan data saat ini.
@@ -135,7 +139,7 @@ Aplikasi Streamlit memungkinkan kamu mengubah:
 
 - Nilai reference haplotype dan target haplotype (langsung di tabel)
 - Marker target yang hilang menggunakan `?`
-- Jumlah neighbour PBWT-inspired per marker teramati
+- Jumlah reference haplotype terpilih (top-N paling mirip)
 - Emission error rate
 - Recombination / switch rate
 
@@ -164,12 +168,13 @@ Dalam istilah HMM:
 ### Ide Utama IMPUTE5
 
 Daripada memakai semua reference haplotype sebagai state, IMPUTE5 memakai PBWT
-untuk mencari reference haplotype yang mirip secara lokal dengan target terlebih
-dahulu. HMM kemudian hanya dijalankan pada subset yang terpilih.
+untuk mencari reference haplotype yang mirip **secara lokal per window kromosom**
+dengan target terlebih dahulu. HMM kemudian hanya dijalankan pada subset yang terpilih.
 
 ```text
-HMM standar:    semua reference haplotype menjadi state
-HMM ala IMPUTE5: hanya haplotype yang mirip secara lokal menjadi state
+HMM standar:     semua reference haplotype menjadi state
+IMPUTE5 asli:    hanya haplotype yang mirip secara lokal (PBWT) menjadi state
+Demo Streamlit:  hanya top-N haplotype paling mirip secara global menjadi state
 ```
 
 ## Penyederhanaan Dibanding IMPUTE5 Asli
@@ -180,7 +185,10 @@ Demo ini sengaja dibuat kecil dan mudah dibaca.
 |---|---|---|
 | Bahasa/platform | Python/Streamlit | Software command-line (Linux/WSL/HPC) |
 | Data | Array kecil `0/1/?` | VCF, BCF, BGEN, imp5 |
-| Seleksi state | Hitung kecocokan sederhana | PBWT/FM-index yang dioptimalkan |
+| Seleksi state | Hitung total cocok, ambil top-N global | PBWT/FM-index yang dioptimalkan |
+| Kapan selection dilakukan | Sekali, sebelum HMM | Dinamis per window sepanjang kromosom |
+| Transition probability | Angka tetap (slider) | Dihitung dari genetic map dan jarak marker |
+| Normalisasi forward-backward | Forward dan backward dinormalisasi terpisah | Hanya forward yang dinormalisasi |
 | Skala | Beberapa haplotype | Ribuan hingga jutaan haplotype |
 | Tujuan | Menjelaskan algoritma | Pipeline bioinformatika skala besar |
 
@@ -205,8 +213,9 @@ lebih cocok untuk analisis genomik nyata.
 
 ## Ringkasan
 
-> HMM standar memakai semua reference haplotype sebagai hidden state. IMPUTE5
-> mempercepat proses dengan memakai PBWT untuk memilih haplotype yang mirip
-> secara lokal terlebih dahulu. Setelah itu, HMM dijalankan pada state yang lebih
-> sedikit, sehingga proses imputasi menjadi lebih efisien tanpa menghilangkan
+> HMM standar memakai semua reference haplotype sebagai hidden state. Demo ini
+> menyederhanakannya dengan memilih top-N reference yang paling mirip dengan target
+> secara global, lalu menjalankan HMM hanya pada subset tersebut. IMPUTE5 asli
+> melakukan hal yang serupa tetapi dengan PBWT untuk menemukan kecocokan lokal
+> yang lebih akurat dan efisien di skala jutaan haplotype, tanpa menghilangkan
 > struktur probabilistik dari model Li-and-Stephens.
